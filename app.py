@@ -45,7 +45,6 @@ def parse_and_render_message(text):
     将正式回答放入 markdown。
     """
     # 使用非贪婪匹配提取 <think> 内容
-    # re.DOTALL 让 . 也能匹配换行符
     pattern = r"<think>(.*?)</think>(.*)"
     match = re.search(pattern, text, re.DOTALL)
 
@@ -53,7 +52,7 @@ def parse_and_render_message(text):
         thought_content = match.group(1).strip()
         answer_content = match.group(2).strip()
 
-        # 1. 渲染思考过程（默认折叠，expanded=False）
+        # 1. 渲染思考过程（默认折叠）
         if thought_content:
             with st.expander("💭 模型思考过程 (点击展开)", expanded=False):
                 st.markdown(thought_content)
@@ -62,12 +61,9 @@ def parse_and_render_message(text):
         if answer_content:
             st.markdown(answer_content)
         else:
-            # 只有思考没有回答的情况（极少见）
             st.info("模型仅输出了思考过程，未生成最终回答。")
-
     else:
         # 如果没有标签，直接显示全文
-        # 处理流式输出中可能出现的未闭合标签（仅作简单处理，避免显示乱码）
         clean_text = text.replace("<think>", "**[开始思考]**\n").replace("</think>", "\n**[思考结束]**\n")
         st.markdown(clean_text)
 
@@ -101,18 +97,25 @@ def get_chat_title(messages):
     """根据第一条用户消息生成标题"""
     for msg in messages:
         if msg["role"] == "user":
-            return msg["content"][:15] + "..."
+            content = msg["content"]
+            # 如果标题过长，截取前12个字符
+            return content[:12] + "..." if len(content) > 12 else content
     return "新对话"
 
 
-# --- 3. 初始化 Session State ---
-
-if "current_chat_id" not in st.session_state:
+def init_new_chat():
+    """重置为新对话状态"""
     new_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     st.session_state.current_chat_id = new_id
     st.session_state.messages = [
         {"role": "assistant", "content": "你好！我是你的国宝活化助理。关于“舞马衔杯仿皮囊式银壶”，你有什么大胆的创作想法？"}
     ]
+
+
+# --- 3. 初始化 Session State ---
+
+if "current_chat_id" not in st.session_state:
+    init_new_chat()
 
 
 # --- 4. 加载 RAG 模型 (缓存) ---
@@ -159,30 +162,55 @@ with st.sidebar:
     st.subheader("🗂️ 对话管理")
 
     if st.button("➕ 新建对话", use_container_width=True):
-        new_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        st.session_state.current_chat_id = new_id
-        st.session_state.messages = [
-            {"role": "assistant", "content": "已开启新对话。请告诉我你的新想法！"}
-        ]
+        init_new_chat()
         st.rerun()
 
-    with st.expander("📜 历史记录 (点击切换)", expanded=True):
+    with st.expander("📜 历史记录", expanded=True):
         files = get_chat_history_list()
+
+        if not files:
+            st.caption("暂无历史记录")
+
         for file_path in files:
             file_name = os.path.basename(file_path)
             chat_id = file_name.replace(".json", "")
+
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     msgs = json.load(f)
                 title = get_chat_title(msgs)
-                display_label = f"{title}\n({chat_id[4:8]}-{chat_id[9:11]})"
+                # 格式化一下日期显示
+                date_str = f"{chat_id[4:6]}/{chat_id[6:8]} {chat_id[9:11]}:{chat_id[11:13]}"
             except:
-                display_label = chat_id
+                title = "未知对话"
+                date_str = chat_id
 
-            if st.button(display_label, key=chat_id, use_container_width=True):
-                st.session_state.current_chat_id = chat_id
-                st.session_state.messages = msgs
-                st.rerun()
+            # --- 关键修改：使用列布局 [加载 85% | 删除 15%] ---
+            col1, col2 = st.columns([0.85, 0.15])
+
+            with col1:
+                # 选中状态高亮逻辑（可选，通过 emoji 区分）
+                is_current = (st.session_state.current_chat_id == chat_id)
+                label_prefix = "📂 " if is_current else ""
+                display_label = f"{label_prefix}{title}\nRunning at {date_str}"
+
+                if st.button(display_label, key=f"load_{chat_id}", use_container_width=True):
+                    st.session_state.current_chat_id = chat_id
+                    st.session_state.messages = msgs
+                    st.rerun()
+
+            with col2:
+                # 删除按钮
+                if st.button("🗑", key=f"del_{chat_id}", help="删除此对话"):
+                    try:
+                        os.remove(file_path)
+                        # 如果删除的是当前正在看的对话，重置为新对话
+                        if st.session_state.current_chat_id == chat_id:
+                            init_new_chat()
+                        st.success("已删除")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"删除失败")
 
     st.divider()
 
@@ -203,7 +231,7 @@ with st.sidebar:
 
 st.header(f"当前会话: {get_chat_title(st.session_state.messages)}")
 
-# 6.1 显示历史消息（使用新的渲染函数）
+# 6.1 显示历史消息
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         if message["role"] == "assistant":
@@ -245,36 +273,29 @@ rag_chain = (
 
 # 6.2 处理新消息输入
 if user_input := st.chat_input("请输入你的创意方案..."):
-    # 用户消息上屏
     with st.chat_message("user"):
         st.markdown(user_input)
     st.session_state.messages.append({"role": "user", "content": user_input})
     save_chat_history(st.session_state.current_chat_id, st.session_state.messages)
 
-    # 助手消息生成
     with st.chat_message("assistant"):
-        # 创建一个空的容器，用于实时更新
         message_placeholder = st.empty()
         full_response = ""
 
         with st.spinner(f"{role} 正在思考与查阅资料..."):
             try:
-                # 流式输出
                 for chunk in rag_chain.stream(user_input):
                     full_response += chunk
-                    # 流式过程中，暂时显示原始内容（包含 <think> 标签）
-                    # 这样可以保证输出速度，避免复杂的 UI 渲染导致闪烁
                     message_placeholder.markdown(full_response + "▌")
 
-                # --- 关键点：生成完成后，清除原始内容，替换为漂亮的结构化显示 ---
-                message_placeholder.empty()  # 清空占位符
-                parse_and_render_message(full_response)  # 调用函数进行最终渲染
+                # 渲染最终结果（折叠思考过程）
+                message_placeholder.empty()
+                parse_and_render_message(full_response)
 
             except Exception as e:
                 st.error(f"生成出错: {e}")
                 full_response = "抱歉，系统遇到了一些问题，请稍后再试。"
 
-    # 保存助手回答
     st.session_state.messages.append({"role": "assistant", "content": full_response})
     save_chat_history(st.session_state.current_chat_id, st.session_state.messages)
 
@@ -282,11 +303,16 @@ if user_input := st.chat_input("请输入你的创意方案..."):
 st.markdown("""
 <style>
     .stButton>button {border-radius: 8px;}
-    div[data-testid="stExpander"] div[data-testid="stVerticalBlock"] button {
+    /* 让删除按钮变红一点，提示危险操作（可选） */
+    div[data-testid="column"]:nth-of-type(2) button {
+        color: #ff4b4b;
+        border-color: #ff4b4b;
+    }
+    /* 调整加载按钮文本左对齐 */
+    div[data-testid="column"]:nth-of-type(1) button {
         text-align: left;
         border: 1px solid #eee;
     }
-    /* 调整 Expander 的样式，让它看起来更像思考框 */
     .streamlit-expanderHeader {
         background-color: #f0f2f6;
         border-radius: 5px;

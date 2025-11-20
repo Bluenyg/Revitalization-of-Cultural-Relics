@@ -1,7 +1,7 @@
 # RAG 核心框架
 langchain==0.1.0
 langchain-community==0.0.10
-langchain-core==0.1.10
+langchain-core==0.3.80
 
 # 向量数据库
 chromadb==0.4.22

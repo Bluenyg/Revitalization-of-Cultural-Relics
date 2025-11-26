@@ -13,3 +13,6 @@ streamlit==1.30.0
 pypdf==3.17.4       # 如果后续需要加载 PDF 资料
 watchdog==3.0.0     # Streamlit 文件监控
 tiktoken            # 计算 token 数量（可选，但推荐）
+
+markdown
+unstructured

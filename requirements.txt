@@ -7,7 +7,7 @@ langchain-core==0.1.10
 chromadb==0.4.22
 
 # Web 界面框架
-streamlit==1.30.0
+streamlit==1.37.0
 
 # 辅助工具
 pypdf==3.17.4       # 如果后续需要加载 PDF 资料
